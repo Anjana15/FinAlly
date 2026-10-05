@@ -1,0 +1,6 @@
+{
+  "name": "independent-reviewer",
+  "description": "Independent code review of all changes since the last commit.",
+  "version": "1.0.0",
+  "author": { "name": "Anjana" }
+}

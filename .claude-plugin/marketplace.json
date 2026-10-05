@@ -1,0 +1,12 @@
+{
+  "name": "finally-plugins",
+  "owner": { "name": "Anjana" },
+  "plugins": [
+    {
+      "name": "independent-reviewer",
+      "source": "./independent-reviewer",
+      "description": "Reviews changes since the last commit.",
+      "version": "1.0.0"
+    }
+  ]
+}
