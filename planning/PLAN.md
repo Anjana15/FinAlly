@@ -179,6 +179,8 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Each SSE event contains ticker, price, previous price, timestamp, and change direction
 - Client handles reconnection automatically (EventSource has built-in retry)
 
+**Implementation design:** `planning/MARKET_DATA_DESIGN.md` has the complete market-data design: module code, SSE wire format, Massive error handling and tests. Where it differs from this section's open questions, follow that doc.
+
 ---
 
 ## 7. Database
