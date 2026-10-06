@@ -164,15 +164,31 @@ claude --remote       # run a Claude Code session in a cloud sandbox (§8)
 claude plugin validate <plugin-dir>   # check plugin.json / marketplace.json
 ```
 
-### Project commands (planned, see CLAUDE.md)
+### Project commands (real, after the agent-teams build)
 
 ```bash
-cd backend && uv sync && uv run pytest
-cd backend && uv add litellm pydantic                 # deps for the cerebras skill
-cd frontend && npm install && npm run build
+# Backend (inside the Claude sandbox first: export UV_CACHE_DIR=$TMPDIR/uv-cache)
+cd backend && uv sync
+cd backend && uv run pytest                                   # all backend tests
+cd backend && uv run pytest tests/db/test_trades.py::<name>   # one test
+cd backend && LLM_MOCK=true uv run uvicorn app.main:app --port 8000   # dev server; serves frontend/out if built
+cd backend && uv run python market_demo.py [--serve]          # market data only
+
+# Frontend
+cd frontend && npm install && npm run build   # static export -> frontend/out
+cd frontend && npm test                       # Vitest unit tests
+cd frontend && npm run lint                   # tsc --noEmit
+cd frontend && npm run dev                    # :3000, proxies /api to :8000
+
+# Docker / scripts
 docker build -t finally .
 docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
-docker compose -f test/docker-compose.test.yml up     # E2E with LLM_MOCK=true
+scripts/start_mac.sh [--build] [--no-open]    # stop: scripts/stop_mac.sh (Windows: .ps1); FINALLY_PORT overrides 8000
+
+# E2E (LLM_MOCK=true, fresh DB each run)
+docker compose -f test/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from playwright
+docker compose -f test/docker-compose.test.yml down
+cd test && npm ci && npx playwright test     # local run against BASE_URL; npm run report for the HTML report
 ```
 
 ### Git
@@ -198,6 +214,8 @@ ls -la                        # spot sandbox placeholders: they show as `crw-rw-
 - **Skills are on-demand docs.** Use a skill like `cerebras` to keep Claude from guessing at a third-party API.
 - **Use a fresh context for review.** A subagent or plugin reviewer doesn't share the author's assumptions.
 - **Commit often.** Small commits make `git diff HEAD` reviews useful and mistakes easy to undo.
+- **Contracts let agents run in parallel.** A binding contract (ownership, signatures, HTTP shapes, test ids) is what made the agent team work (§13).
+- **Ignore rules can hide source.** Check `git check-ignore` before trusting `git add -A` (§14).
 
 ## 7. Fixes applied (2026-10-05)
 
@@ -270,3 +288,88 @@ These are written before any code, so the backend agent has a contract to follow
 ## 11. Other small things
 
 - **Commit hygiene:** after `/install-github-app` the remote got ahead (merge commit). Pull before continuing local work to avoid diverging history.
+- **Switching branches with uncommitted edits:** git refuses if the other branch changes the same file. Use `git stash push -m "<why>" -- <file>`, then `git checkout <branch>`, then `git stash pop` (expect conflicts if both versions changed) or `git stash list` / `git stash show -p stash@{0}` to look first.
+- **Sandbox-protected files don't switch branches.** `.claude/settings.json` is bind-mounted read-only by the sandbox, so `git checkout agent-teams` failed to update it ("Device or resource busy") and it shows as modified. Fix it from outside the sandbox: `! git checkout -- .claude/settings.json`, then restart Claude Code.
+
+## 12. Issue → PR with `@claude` (market data backend)
+
+1. Consolidate the three research docs into one build doc with complete code and tests: `planning/MARKET_DATA_DESIGN.md` (PR #2).
+2. Open GitHub issue #3 mentioning `@claude` and pointing at that doc.
+3. The action creates branch `claude/issue-3-<timestamp>`, implements `backend/app/market/` (interface, cache, simulator, Massive client/source, factory, SSE, tracking) with tests, and opens PR #4 as `claude[bot]`.
+4. The review workflow comments; reply `@claude <fix>` to iterate; merge; `git pull`.
+
+```bash
+gh issue create --title "..." --body "@claude implement planning/MARKET_DATA_DESIGN.md"
+gh pr list && gh pr checkout 4 && gh pr view 4 --comments
+gh run list && gh run view <id> --log
+```
+
+**Lesson:** when the design doc already contains the code and the tests, an unattended agent (or a cheaper model) only has to copy, wire up and verify, so it rarely goes wrong.
+
+## 13. Agent Teams (branch `agent-teams`, commit `72cb929`)
+
+The whole v1 app (backend db/services/api/llm, Next.js frontend, Docker, scripts, Playwright E2E: 97 files, ~11.8k lines) was built in one session by an **agent team**: a lead plus teammates working in parallel.
+
+**Enabling it** (`.claude/settings.json`, experimental):
+
+```json
+{
+  "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" },
+  "teammateMode": "in-process",
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true
+  }
+}
+```
+
+- `teammateMode: "in-process"` runs the teammates inside the same Claude Code process, so there's no need for tmux/split panes.
+- Teammates have their own context windows and talk to each other by messages; the lead coordinates.
+- Restart Claude Code after changing `settings.json`.
+
+**The team** (from `planning/TEAM_CONTRACT.md` §1):
+
+| Teammate | Owns |
+|---|---|
+| lead | `planning/`, `CLAUDE.md`, `README.md`, coordination, **all commits** |
+| db-engineer | `backend/app/db/**` + tests |
+| backend-api | `main.py`, `api/**`, `services/**` (the one trade path), deps |
+| llm-engineer | `backend/app/llm/**` (schema, prompt, LiteLLM client, mock, chat router) |
+| frontend | `frontend/**` |
+| devops | `Dockerfile`, `.dockerignore`, `scripts/**`, compose file, `.gitignore`, `.env.example` |
+| integration-tester | `test/**` (Playwright), `planning/E2E_REPORT.md` |
+
+`backend/app/market/**` was frozen: it already existed (from PR #4) with passing tests.
+
+**What made it work: a binding contract written before anyone coded.** `planning/TEAM_CONTRACT.md` holds:
+1. **File ownership:** only edit files you own; message the owner otherwise. Parallel agents never collide.
+2. **Exact Python signatures** (`app.db`, `app.services`, `app.llm`), so dependants code against interfaces that don't exist yet.
+3. **HTTP shapes**, including one error shape `{"error","detail"}` (return `JSONResponse`, not `HTTPException`, which would nest it under `detail`).
+4. **Deterministic `LLM_MOCK` rules** ("buy 2 AAPL" → a trade, "add X" → watchlist change, else a fixed message), executed through the *real* trade path.
+5. **Stable `data-testid`s** that the frontend must provide and the E2E tests use exclusively.
+6. **Process:** unit tests come with your code; message lead + integration-tester with a one-line status when usable; bugs go to the owner, who replies "fixed: <summary>"; contract changes go in a **Changelog** at the bottom and are messaged to everyone affected.
+
+**Integration testing as a teammate** (`planning/E2E_REPORT.md`):
+- Run 1: backend only, while the frontend was still failing to build: 16/16 API tests passed.
+- Run 2: full stack. 36/40 at first, but all 4 failures were *test* bugs (wording-based asserts, a race on history loading, `setOffline` not killing an EventSource, a race on `unroute`). Then 40/40 twice with 0 flaky.
+- Run 3: the official Docker path: 40/40 in ~27 s.
+- One real issue (E2E-001: quantities shown as `1e+06`) was filed to db-engineer and fixed the same day.
+
+**Lessons:**
+- Spend the first part of the session on the contract; it's what lets 6 agents work at once without stepping on each other.
+- Tester-owned E2E with only contract selectors catches cross-team mismatches; when tests fail, check whether the *test* is wrong before blaming the app.
+- One committer (the lead) keeps history clean.
+- Update `CLAUDE.md` at the end so the next session sees the real commands (it now says "v1 build is complete").
+
+**Sandbox notes for teams** (also in the contract §7 and E2E report):
+- `export UV_CACHE_DIR=$TMPDIR/uv-cache`; `PLAYWRIGHT_BROWSERS_PATH=$TMPDIR/pw-browsers`; `npm_config_cache=$TMPDIR/npm-cache`.
+- Background processes don't survive between sandboxed commands, so start the backend **in the same command** as `npx playwright test`.
+- The Chromium download needs `storage.googleapis.com` and `cdn.playwright.dev` allowed.
+- Port 8000 was taken by another container locally, so the local E2E wrapper uses `PORT` (default 8013) and `BASE_URL`.
+
+## 14. Gotchas found
+
+- **`frontend/src/lib/` is gitignored and was NOT committed.** The Python `.gitignore` template's `lib/` rule matches it (`git check-ignore -v frontend/src/lib/api.ts` → `.gitignore:17:lib/`). 14 frontend files import `@/lib/...` (`api`, `format`, `prices`, `portfolio`, `treemap`, `types`), so a fresh clone of `agent-teams` can't build. Fix: change the rule to `/lib/` (or add `!frontend/src/lib/`), then `git add frontend/src/lib` and commit.
+- Before a big commit, check what's ignored and untracked: `git status --short --ignored`, `git status --short -uall | grep -v node_modules`, `git check-ignore -v <path>`.
+- Stale `__pycache__`-only dirs on `main` (`backend/app/api`, `db`, `llm`, `services`) were leftovers of this build on another branch; they disappear once you're on `agent-teams`.
