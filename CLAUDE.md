@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-FinAlly (Finance Ally) is an AI-powered trading workstation: live streaming prices, a simulated portfolio, and an LLM chat assistant that can execute trades. The repo is currently **greenfield** — `backend/`, `frontend/`, and `db/` exist but are empty. The authoritative spec is `planning/PLAN.md`; read it before implementing anything. Agents coordinate through files in `planning/`, which serve as the shared contract — update them when a decision changes the contract.
-
-Build/test commands below are the ones the plan prescribes; verify they exist before relying on them and update this file once real tooling lands.
+FinAlly (Finance Ally) is an AI-powered trading workstation: live streaming prices, a simulated portfolio, and an LLM chat assistant that can execute trades. **The v1 build is complete:** backend (`backend/app/{market,db,services,api,llm}`), frontend (`frontend/`), Docker and scripts, and the Playwright E2E suite (`test/`). The spec is `planning/PLAN.md`. The binding cross-team contract (file ownership, Python interfaces, HTTP shapes, mock-LLM rules, E2E `data-testid`s) is `planning/TEAM_CONTRACT.md`. Read both before changing anything that crosses a boundary, and update them when a decision changes the contract.
 
 ## Architecture (as specified)
 
@@ -23,7 +21,7 @@ Single Docker container, single port (8000):
 - **Single-user, multi-user-ready**: every table has `user_id` defaulting to `"default"`. Keep it that way.
 - **Trades**: market orders only, instant fill at cached price, fractional shares allowed. Manual trades (`POST /api/portfolio/trade`) and LLM trades must go through the **same validation path** (cash for buys, shares for sells). Record a `portfolio_snapshots` row after every trade and every 30s via background task.
 - **Chat flow** (`POST /api/chat`, non-streaming): load portfolio + watchlist + recent `chat_messages` → call LLM with structured output `{message, trades[], watchlist_changes[]}` → auto-execute actions (no confirmation) → store message with `actions` JSON → return. Validation failures are reported back in the response, not raised.
-- **LLM**: LiteLLM → OpenRouter, model `openrouter/openai/gpt-oss-120b` with Cerebras as provider; use the `cerebras-inference` skill when writing LLM code. `LLM_MOCK=true` must return deterministic responses (used by E2E tests and development without a key).
+- **LLM**: LiteLLM → OpenRouter, model `openrouter/openai/gpt-oss-120b` with Cerebras as provider; use the `cerebras` skill when writing LLM code. `LLM_MOCK=true` must return deterministic responses (used by E2E tests and development without a key).
 
 ## Environment
 
@@ -33,27 +31,32 @@ Single Docker container, single port (8000):
 - `MASSIVE_API_KEY` — optional; empty means simulator
 - `LLM_MOCK` — `true` for deterministic mock LLM
 
-## Commands (planned)
+## Commands
 
 ```bash
-# Backend
+# Backend (in this sandbox, first: export UV_CACHE_DIR=$TMPDIR/uv-cache)
 cd backend && uv sync
-cd backend && uv run pytest                          # all tests
+cd backend && uv run pytest                                   # all tests
 cd backend && uv run pytest path/to/test_file.py::test_name   # single test
+cd backend && LLM_MOCK=true uv run uvicorn app.main:app --port 8000   # dev server (serves frontend/out if built)
+cd backend && uv run python market_demo.py [--serve]           # market data only
 
 # Frontend
-cd frontend && npm install && npm run build          # produces static export
+cd frontend && npm install && npm run build   # static export -> frontend/out
+cd frontend && npm test                       # Vitest unit tests
+cd frontend && npm run dev                    # :3000, proxies /api to :8000
 
 # Full app (Docker)
 docker build -t finally .
 docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
-scripts/start_mac.sh [--build]   # / scripts/stop_mac.sh (Windows: .ps1 equivalents); must be idempotent
+scripts/start_mac.sh [--build] [--no-open]   # / scripts/stop_mac.sh (Windows: .ps1); FINALLY_PORT overrides 8000
 
-# E2E (runs with LLM_MOCK=true)
-docker compose -f test/docker-compose.test.yml up
+# E2E (LLM_MOCK=true, fresh DB each run)
+docker compose -f test/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from playwright
+docker compose -f test/docker-compose.test.yml down
 ```
 
-The Dockerfile is multi-stage: Node 20 slim builds the frontend → Python 3.12 slim runs `uv sync`, copies the export into `static/`, and starts uvicorn on 8000.
+The Dockerfile is multi-stage. Node 20 slim builds the frontend. Python 3.12 slim then runs `uv sync`, copies the export to `/app/static`, and starts uvicorn on 8000 with a single worker, because the price cache lives in the process. Env vars: `FINALLY_DB_PATH` and `FINALLY_STATIC_DIR` override the paths, and `SIMULATOR_SEED` makes simulator prices reproducible.
 
 ## UI conventions
 

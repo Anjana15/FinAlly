@@ -1,0 +1,49 @@
+# VCS / editor / agent tooling
+.git
+.github
+.claude
+.claude-plugin
+**/.claude
+**/.mcp.json
+.idea
+.vscode
+.bashrc
+.bash_profile
+.profile
+.zshrc
+.zprofile
+.gitconfig
+.gitmodules
+.ripgreprc
+independent-reviewer
+planning
+*.md
+!frontend/**/*.md
+
+# Secrets: passed at runtime via --env-file, never baked in
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Node / Next.js
+**/node_modules
+frontend/.next
+frontend/out
+**/npm-debug.log*
+
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Runtime data
+db
+**/*.db
+**/*.db-*
+
+# E2E tests run in their own container
+test

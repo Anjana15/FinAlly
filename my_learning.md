@@ -141,10 +141,27 @@ Uses: formatting/linting after edits, running tests, blocking risky commands, no
 /model, /fast         # switch model / toggle fast mode
 /memory               # edit memory/CLAUDE.md files
 /hooks, /agents       # inspect hooks / manage subagents
+/install-github-app   # install the Claude GitHub App + add the @claude and PR-review workflows (§9)
+/sandbox              # view/change Bash sandbox settings (§8)
+/reload-plugins       # reload plugins without restarting
+& <prompt>            # send the prompt to a remote/cloud session (§8)
 ! <cmd>               # run a shell command and put its output in the conversation
 # <text>              # quickly add a note to memory
 Shift+Tab             # cycle permission modes (incl. plan mode)
 Esc / Esc Esc         # interrupt / rewind to an earlier message
+```
+
+### Remote / cloud sessions
+
+```bash
+claude --remote       # run a Claude Code session in a cloud sandbox (§8)
+# web: https://claude.ai/code
+```
+
+### Plugin validation
+
+```bash
+claude plugin validate <plugin-dir>   # check plugin.json / marketplace.json
 ```
 
 ### Project commands (planned, see CLAUDE.md)
@@ -165,6 +182,11 @@ git status
 git diff HEAD                 # what changed since the last commit (what a reviewer should read)
 git add -A && git commit -m "..."
 git check-ignore -v <file>    # check whether a file is gitignored
+git pull                      # bring in remote commits (e.g. the merged GitHub-app PR)
+git log --oneline --graph -8  # see recent history, incl. merge commits
+git log --stat -3             # which files each recent commit touched
+git show --stat <commit>      # summary of one commit
+ls -la                        # spot sandbox placeholders: they show as `crw-rw-rw- ... 1, 3` (§8)
 ```
 
 ## 6. Key lessons
@@ -186,8 +208,65 @@ git check-ignore -v <file>    # check whether a file is gitignored
 5. **Database files gitignored.** `.gitignore` now covers `db/*.db` (plus journal/WAL files), and `db/.gitkeep` was added.
 6. **`.env.example` added.** It contains no real keys.
 
-**Still to do:**
+**Follow-ups:**
+- ✅ Committed `CLAUDE.md`, `planning/`, `.claude/`, the plugin and config files (commit `27f2fdb`) as the review baseline.
+- ✅ Deleted the old `my-learning.md`.
 - Run `/reload-plugins` (or restart Claude Code) so the reinstalled plugin is picked up.
-- Commit `CLAUDE.md`, `planning/`, `.claude/`, the plugin and the config files to create a review baseline.
-- Delete the old `my-learning.md`, which this file replaces.
 - Fold the high-priority decisions from `planning/REVIEW.md` into `PLAN.md`.
+
+## 8. Sandboxing
+
+Claude Code can run every Bash command inside an OS-level sandbox (bubblewrap on Linux/WSL, Seatbelt on macOS). It is applied **per command**, not to the whole session.
+
+- **Filesystem:** writes are allowed only in the project directory, `$TMPDIR` and a session scratchpad. Settings files, `.claude/skills`, `.claude/hooks` and dotfiles such as `.bashrc` and `.gitconfig` are write-protected, even inside the project.
+- **Network:** traffic goes through a filtering proxy. Hosts that aren't allowlisted are refused, and the refusal is reported back to Claude.
+- **Escape hatch:** a command that fails because of the sandbox can be retried with the sandbox disabled, which goes through the normal permission prompt.
+- **`/sandbox`** shows and changes the sandbox settings.
+- **Why it matters:** with a sandbox, auto/accept modes are much safer. Claude can work for a long time with few prompts while it can't touch credentials, other projects or system config.
+
+**Gotcha seen in this repo:** bubblewrap protects some paths by mounting `/dev/null` over them. In the project directory that leaves stray entries such as `.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode` and `.claude/hooks`, which `ls -la` shows as character devices (`crw-rw-rw- … 1, 3`). `git status` lists them as untracked. **Don't commit them.** Add them to `.gitignore` or ignore them.
+
+### 4 ways to run Claude Code in an isolated (sandboxed/cloud) environment
+
+| # | How | What happens |
+|---|---|---|
+| 1 | `& <prompt>` in the Claude Code CLI | A leading `&` hands the prompt off to a remote/cloud session instead of running it locally (tried here with `& what's 2+2`) |
+| 2 | `claude --remote` | Starts a Claude Code session that runs remotely in a cloud sandbox rather than on your machine |
+| 3 | GitHub (`@claude` via GitHub Actions) | Claude runs on a GitHub runner, isolated from your machine. See §9 |
+| 4 | claude.ai/code (web) | Claude Code in the browser, working on a cloud copy of the repo. Results come back as a branch or PR |
+
+On top of these, the **local Bash sandbox** described above isolates each command when Claude runs on your own machine.
+
+The three market-data docs in §10 were written by Claude running inside the sandbox (commit `7bc8070`, "added documents through sandboxing").
+
+## 9. GitHub integration (`/install-github-app`)
+
+`/install-github-app` installs the Claude GitHub App on the repo, stores a `CLAUDE_CODE_OAUTH_TOKEN` secret, and opens a PR that adds two workflows. Here that was PR #1, merged as `ea0ad5a`.
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `.github/workflows/claude.yml` | `@claude` in an issue, an issue comment, a PR review or a PR review comment | Runs Claude Code on the request. For example, "@claude fix this bug" can make it push a branch and open a PR. |
+| `.github/workflows/claude-code-review.yml` | PR opened, updated, marked ready or reopened | Runs `/code-review:code-review --comment` from the `code-review` plugin and posts inline review comments |
+
+Both use `anthropics/claude-code-action@v1`. Useful knobs:
+- `prompt:` — fixed instructions (otherwise Claude does what the `@claude` comment says).
+- `claude_args:` — CLI flags, e.g. `--allowedTools "Bash(gh pr *)"`.
+- `plugin_marketplaces:` / `plugins:` — load plugins in CI.
+- `paths:` under `on.pull_request` — only review PRs that change certain files.
+- `permissions:` — keep them minimal; `actions: read` lets Claude read CI results.
+
+After the merge, run `git pull` locally so `main` includes the workflows.
+
+## 10. Market data design docs (`planning/`)
+
+These are written before any code, so the backend agent has a contract to follow:
+
+- **`MARKET_INTERFACE.md`**: the unified Python API. It covers the data model, the in-memory price cache, the abstract source interface, the simulator and Massive implementations, and a factory that picks one from `MASSIVE_API_KEY`. It also says how consumers (SSE, trades, chat) use it and how to test it.
+- **`MARKET_SIMULATOR.md`**: GBM with correlated moves and random shock events, seed prices, the engine and data source split, tunable parameters, and tests.
+- **`MASSIVE_API.md`**: Massive (formerly Polygon.io) REST reference. It covers auth (prefer the header to the query param, so keys stay out of logs), multi-ticker snapshots, end-of-day aggregates, market status, how to pick "the price" from a snapshot, a free-tier polling strategy, and code examples.
+
+**Lesson:** research third-party APIs into a reference doc once, then point agents at it. That's the same idea as the `cerebras` skill: don't let the agent guess at an external API.
+
+## 11. Other small things
+
+- **Commit hygiene:** after `/install-github-app` the remote got ahead (merge commit). Pull before continuing local work to avoid diverging history.

@@ -1,0 +1,46 @@
+# E2E test stack (PLAN §12). Run from the repo root:
+#   docker compose -f test/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from playwright
+# Clean up afterwards:
+#   docker compose -f test/docker-compose.test.yml down
+#
+# The app runs with the mock LLM and a seeded simulator, and has NO volume,
+# so every run starts from a fresh database.
+#
+# Playwright version: pinned to 1.62.1. The image tag below and the
+# "@playwright/test" version in test/package.json MUST match exactly
+# (integration-tester owns test/package.json).
+
+name: finally-e2e
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: finally:e2e
+    environment:
+      LLM_MOCK: "true"
+      SIMULATOR_SEED: "42"
+      OPENROUTER_API_KEY: ""
+      MASSIVE_API_KEY: ""
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.62.1-noble
+    working_dir: /tests
+    volumes:
+      - ./:/tests
+    environment:
+      BASE_URL: http://app:8000
+      CI: "true"
+    ipc: host
+    init: true
+    depends_on:
+      app:
+        condition: service_healthy
+    command: sh -c "npm ci || npm install; npx playwright test"

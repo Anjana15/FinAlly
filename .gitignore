@@ -226,3 +226,43 @@ db/*.db-shm
 
 # Docs
 my_learnings.md
+# ---- FinAlly (devops) ----
+# Node / Next.js / Playwright
+node_modules/
+frontend/.next/
+frontend/out/
+test/node_modules/
+test/test-results/
+test/playwright-report/
+test/blob-report/
+test/playwright/.cache/
+
+# SQLite runtime files (db/ dir itself is kept as the volume mount point)
+db/*.db*
+
+# Secrets (commit .env.example only)
+.env
+.env.*
+!.env.example
+
+# Sandbox placeholder files (not part of the project)
+.bashrc
+.bash_profile
+.profile
+.zshrc
+.zprofile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json
+backend/.mcp.json
+.idea
+.vscode
+.claude/hooks
+.claude/launch.json
+.claude/loop.md
+.claude/output-styles
+.claude/routines
+.claude/scheduled_tasks.json
+.claude/workflows
+backend/.claude/
